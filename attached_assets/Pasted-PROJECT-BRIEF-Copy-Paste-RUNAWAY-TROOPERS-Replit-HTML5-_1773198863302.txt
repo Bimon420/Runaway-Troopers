@@ -1,0 +1,156 @@
+PROJECT BRIEF (Copy/Paste) — RUNAWAY TROOPERS (Replit / HTML5 Canvas)
+
+Goal
+- Recreate the core idea + mechanics of the Unity prototype in a simple Replit browser version.
+- Visual fidelity doesn’t matter. Mechanics must be present.
+
+High Concept
+- 2D top-down survival arcade.
+- Player is a formation of THREE small triangles.
+- Each triangle is an individual life AND has its own hitbox.
+- Hazards: MG salvos (telegraph line -> real shot) + explosions (telegraph circle -> blast).
+- Survive as long as possible.
+
+Playfield
+- HTML5 Canvas (e.g. 960×540).
+- Entities rendered with simple triangles/lines/circles.
+
+Player
+- Player “unit” is composed of 3 triangle parts (Triforce-like formation):
+      ▲
+    ▲   ▲
+- The 3 parts move together as a single unit (parent position), with small local offsets.
+- Each part:
+  - has its own collider/hitbox
+  - can be hit individually
+  - when hit: flashes briefly, then disappears
+- Lives = number of remaining triangle parts (3 → 2 → 1 → 0).
+
+Movement
+- WASD or Arrow Keys to move freely.
+- Keep movement simple: velocity-based or direct position updates per frame.
+
+Dash / Dodge
+- Key: SPACE
+- Behavior:
+  - short dash in current movement direction
+  - invulnerability (“i-frames”) during dash
+  - cooldown
+- Suggested values:
+  - dashDuration ~ 0.10s
+  - dashDistance small/medium
+  - iFrames ~ 0.25s
+  - cooldown ~ 0.6s
+
+Start Grace (Anti-instant-hit)
+- At game start, player should not lose a life immediately.
+- Add a spawn grace invulnerability window:
+  - startGrace ~ 0.75–1.5s
+  - During grace: no damage taken (and ideally no blinking).
+
+MG System (Telegraph + Shot)
+- MG attack happens in two phases:
+  1) Telegraph:
+     - orange line showing where the shot will be
+     - can be angled
+     - telegraphDelay ~ 0.25s
+  2) Real shot:
+     - thin red line/beam (“a stroke”)
+     - damage zone is a thin rectangle aligned with the beam direction
+     - hit checks happen in ticks during a hit window
+     - duration ~ 0.35s
+
+MG “Fan” Spawner (from bottom, angled)
+- Shots originate from below the screen (originY).
+- Each shot picks:
+  - random origin X within range
+  - random angle between minAngleDeg and maxAngleDeg around UP
+- This creates a fan/spread pattern from the bottom.
+
+MG Damage Rules (configurable)
+- We want an option where the MG salvo hits only the FIRST target, then stops affecting others.
+- “First target” definition:
+  - either first collider found
+  - or better: closest target along beam direction (smallest projection distance from beam start).
+- After first hit:
+  - stop applying damage (and optionally destroy the shot object).
+
+Explosions (Telegraph + Blast)
+- Two-phase hazard:
+  1) Telegraph:
+     - circle marker appears (orange)
+     - telegraphDelay ~ 0.6s (or tune)
+  2) Explosion:
+     - radial damage zone
+     - hit test: distance(entityCenter, explosionCenter) < radius
+- Explosion should damage actual entities (player triangle parts / soldiers), not some “root” placeholder.
+- Each explosion can be “hit each target once” for fairness.
+
+Soldiers (Enemies)
+- Many small triangle “soldiers” moving around.
+- They mainly add chaos / moving obstacles.
+- When hit by MG or explosion:
+  - either die instantly or take damage -> die.
+- Simple movement is OK (random drift, wander, or moving downward).
+
+Hitboxes & Collision
+- Player should NOT be one big hitbox.
+- Player is THREE separate hitboxes, one per triangle part.
+- Collisions:
+  - MG shot: rectangle vs triangle-part (simplify as rectangle vs circle/point or AABB vs point)
+  - Explosion: circle distance check
+
+Minimal Replit Project Structure
+- index.html (canvas + basic UI)
+- style.css (optional)
+- script.js (game loop + all logic)
+
+Game Loop
+- requestAnimationFrame loop:
+  - update(dt)
+  - render(ctx)
+
+Entity Model Suggestion
+- Player:
+  - pos (x,y)
+  - parts: array of 3 Part objects:
+    - offset (local)
+    - alive bool
+    - hitbox radius or triangle vertices
+- Hazards:
+  - MGTelegraph {pos, dir, width, length, timeLeft}
+  - MGShot {pos, dir, shotWidth, length, hitWindow, tickRate, firstHitOnly, active}
+  - ExplosionTelegraph {pos, radius, timeLeft}
+  - Explosion {pos, radius, timeLeft}
+- Soldiers:
+  - pos, vel, alive
+
+Visual Style
+- Minimal:
+  - player parts: green or white triangles
+  - soldiers: white triangles
+  - MG telegraph: orange line
+  - MG shot: red thin line
+  - explosion telegraph: orange ring
+  - explosion blast: red ring or flash
+
+Known Pitfalls From Unity Version (avoid in Replit)
+- “Wrong target gets hit”: explosions/mg should hit actual parts, not a root object.
+- “Too thick beams”: keep telegraphWidth separate from shotWidth.
+- “Immediate start hit”: use startGrace/startDelay gating.
+- “Double spawners”: ensure only one MG spawner and one explosion spawner unless intended.
+- “Parameter overrides”: define width/length in one place, don’t unintentionally overwrite.
+
+Win/Lose & Scoring
+- Lose when all 3 parts are dead.
+- Score based on survival time (seconds).
+
+Desired Outcome
+- A playable Replit version where:
+  - Player moves + dashes with iFrames
+  - 3-part lives system works (individual parts die)
+  - MG telegraph + angled shot fan works
+  - Explosions telegraph + blast works
+  - Survival time score works
+
+END BRIEF

@@ -527,6 +527,63 @@ function update(s: GameState, dt: number) {
     if (!sol.alive && sol.flashTimer === 0) sol.flashTimer = rand(2, 5);
   });
 
+  // ─── Player ↔ Soldier Collision (soldiers physically block the player) ───────
+  const COLLIDE_DIST = PART_RADIUS + SOLDIER_SIZE + 4;
+  s.soldiers.forEach(sol => {
+    if (!sol.alive) return;
+    p.parts.forEach((pt, i) => {
+      if (!pt.alive) return;
+      const wx = p.x + PART_OFFSETS[i].x;
+      const wy = p.y + PART_OFFSETS[i].y;
+      const cdx = wx - sol.x;
+      const cdy = wy - sol.y;
+      const dist = Math.sqrt(cdx * cdx + cdy * cdy);
+      if (dist < COLLIDE_DIST && dist > 0.001) {
+        const overlap = COLLIDE_DIST - dist;
+        const nx = cdx / dist;
+        const ny = cdy / dist;
+        // Push player away (strong) and nudge soldier (mild)
+        p.x += nx * overlap * 0.72;
+        p.y += ny * overlap * 0.72;
+        sol.x -= nx * overlap * 0.28;
+        sol.y -= ny * overlap * 0.28;
+        // Kick soldier velocity away so it doesn't immediately push back
+        sol.vx -= nx * 60;
+        sol.vy -= ny * 60;
+        const svlen = Math.sqrt(sol.vx * sol.vx + sol.vy * sol.vy);
+        if (svlen > SOLDIER_SPEED * 2) {
+          sol.vx = (sol.vx / svlen) * SOLDIER_SPEED * 2;
+          sol.vy = (sol.vy / svlen) * SOLDIER_SPEED * 2;
+        }
+      }
+    });
+  });
+
+  // Re-clamp player after collision pushback
+  p.x = Math.max(20, Math.min(W - 20, p.x));
+  p.y = Math.max(20, Math.min(H - 20, p.y));
+
+  // ─── Soldier ↔ Soldier Separation (prevent stacking) ────────────────────────
+  const SOL_SEP = SOLDIER_SIZE * 2 + 3;
+  for (let i = 0; i < s.soldiers.length; i++) {
+    if (!s.soldiers[i].alive) continue;
+    for (let j = i + 1; j < s.soldiers.length; j++) {
+      if (!s.soldiers[j].alive) continue;
+      const sdx = s.soldiers[j].x - s.soldiers[i].x;
+      const sdy = s.soldiers[j].y - s.soldiers[i].y;
+      const sd = Math.sqrt(sdx * sdx + sdy * sdy);
+      if (sd < SOL_SEP && sd > 0.001) {
+        const overlap = SOL_SEP - sd;
+        const nx = sdx / sd;
+        const ny = sdy / sd;
+        s.soldiers[i].x -= nx * overlap * 0.5;
+        s.soldiers[i].y -= ny * overlap * 0.5;
+        s.soldiers[j].x += nx * overlap * 0.5;
+        s.soldiers[j].y += ny * overlap * 0.5;
+      }
+    }
+  }
+
   // ─── NEW: Shield Pickup Spawner ──────────────────────────────────────────────
   s.shieldSpawnTimer -= dt;
   if (s.shieldSpawnTimer <= 0) {

@@ -35,6 +35,26 @@ const SOLDIER_COUNT = 22;
 const SOLDIER_SIZE = 7;
 const SOLDIER_SPEED = 60;
 
+// ── NEW: Shield pickup ──────────────────────────────────────────────────────
+const SHIELD_SPAWN_INTERVAL_MIN = 12;
+const SHIELD_SPAWN_INTERVAL_MAX = 20;
+const SHIELD_PICKUP_RADIUS = 22;
+const SHIELD_LIFETIME = 14; // seconds before it despawns
+
+// ── NEW: Homing missile ─────────────────────────────────────────────────────
+const MISSILE_SPAWN_INTERVAL_MIN = 8;
+const MISSILE_SPAWN_INTERVAL_MAX = 16;
+const MISSILE_TELEGRAPH_DURATION = 1.2;
+const MISSILE_SPEED_INITIAL = 70;
+const MISSILE_SPEED_MAX = 210;
+const MISSILE_ACCEL = 55;
+const MISSILE_HIT_RADIUS = 14;
+const MISSILE_BLAST_RADIUS = 40;
+
+// ── NEW: Kill combo ─────────────────────────────────────────────────────────
+const COMBO_WINDOW = 2.5;
+const COMBO_MAX_MULTIPLIER = 8;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Part {
   alive: boolean;
@@ -55,6 +75,8 @@ interface Player {
   iframeTimer: number;
   dashCooldown: number;
   grace: number;
+  shielded: boolean;
+  shieldFlashTimer: number; // brief flash on absorb
 }
 
 interface MGTelegraph {
@@ -98,6 +120,23 @@ interface Soldier {
   flashTimer: number;
 }
 
+interface ShieldPickup {
+  id: number;
+  x: number; y: number;
+  lifetime: number;
+  pulseTimer: number;
+}
+
+interface HomingMissile {
+  id: number;
+  x: number; y: number;
+  vx: number; vy: number;
+  speed: number;
+  telegraphTimer: number; // > 0: still telegraphing
+  alive: boolean;
+  trailPoints: { x: number; y: number }[];
+}
+
 interface GameState {
   phase: "menu" | "playing" | "dead";
   player: Player;
@@ -106,13 +145,21 @@ interface GameState {
   expTelegraphs: ExpTelegraph[];
   explosions: Explosion[];
   soldiers: Soldier[];
+  shieldPickups: ShieldPickup[];
+  missiles: HomingMissile[];
   score: number;
   mgSpawnTimer: number;
   expSpawnTimer: number;
+  shieldSpawnTimer: number;
+  missileSpawnTimer: number;
   mgSalvoQueue: { angle: number }[];
   mgSalvoTimer: number;
+  combo: number;
+  comboTimer: number;
+  comboDisplayTimer: number;
   nextId: number;
   keys: Set<string>;
+  screenShake: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -133,6 +180,8 @@ function makePlayer(): Player {
     iframeTimer: START_GRACE,
     dashCooldown: 0,
     grace: START_GRACE,
+    shielded: false,
+    shieldFlashTimer: 0,
   };
 }
 
@@ -165,17 +214,24 @@ function makeState(): GameState {
     expTelegraphs: [],
     explosions: [],
     soldiers,
+    shieldPickups: [],
+    missiles: [],
     score: 0,
     mgSpawnTimer: 2.5,
     expSpawnTimer: 3.0,
+    shieldSpawnTimer: rand(SHIELD_SPAWN_INTERVAL_MIN, SHIELD_SPAWN_INTERVAL_MAX),
+    missileSpawnTimer: rand(MISSILE_SPAWN_INTERVAL_MIN, MISSILE_SPAWN_INTERVAL_MAX),
     mgSalvoQueue: [],
     mgSalvoTimer: 0,
+    combo: 0,
+    comboTimer: 0,
+    comboDisplayTimer: 0,
     nextId: 1000,
     keys: new Set(),
+    screenShake: 0,
   };
 }
 
-// Point-to-line-segment distance (squared)
 function pointLineDistSq(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
   const abx = bx - ax, aby = by - ay;
   const len2 = abx * abx + aby * aby;
@@ -189,12 +245,30 @@ function projOnBeam(px: number, py: number, ox: number, oy: number, dx: number, 
   return (px - ox) * dx + (py - oy) * dy;
 }
 
+// Apply one hit to a player part, respecting shield
+function hitPlayerPart(s: GameState, partIndex: number) {
+  const pt = s.player.parts[partIndex];
+  if (!pt.alive) return;
+  if (s.player.shielded) {
+    s.player.shielded = false;
+    s.player.shieldFlashTimer = 0.5;
+    s.screenShake = Math.max(s.screenShake, 0.12);
+  } else {
+    pt.alive = false;
+    s.screenShake = Math.max(s.screenShake, 0.22);
+  }
+}
+
 // ─── Update ───────────────────────────────────────────────────────────────────
 function update(s: GameState, dt: number) {
   if (s.phase !== "playing") return;
 
-  s.score += dt;
+  const multiplier = s.combo >= 2 ? Math.min(s.combo, COMBO_MAX_MULTIPLIER) : 1;
+  s.score += dt * multiplier;
   const p = s.player;
+
+  // Screen shake decay
+  if (s.screenShake > 0) s.screenShake = Math.max(0, s.screenShake - dt * 3);
 
   // Grace
   if (p.grace > 0) p.grace -= dt;
@@ -210,6 +284,9 @@ function update(s: GameState, dt: number) {
 
   // Dash cooldown
   if (p.dashCooldown > 0) p.dashCooldown -= dt;
+
+  // Shield flash timer
+  if (p.shieldFlashTimer > 0) p.shieldFlashTimer -= dt;
 
   // Input
   let mx = 0, my = 0;
@@ -230,20 +307,14 @@ function update(s: GameState, dt: number) {
     p.y += p.dashVy * dt;
   }
 
-  // Clamp to canvas
   p.x = Math.max(20, Math.min(W - 20, p.x));
   p.y = Math.max(20, Math.min(H - 20, p.y));
 
   // Dash trigger
   if (s.keys.has(" ") && !p.dashing && p.dashCooldown <= 0) {
     let ddx = mx, ddy = my;
-    if (ddx === 0 && ddy === 0) ddx = 0;
     const dlen = Math.sqrt(ddx * ddx + ddy * ddy);
-    if (dlen > 0) {
-      ddx /= dlen; ddy /= dlen;
-    } else {
-      ddx = 1;
-    }
+    if (dlen > 0) { ddx /= dlen; ddy /= dlen; } else { ddx = 1; }
     p.dashing = true;
     p.dashTimer = DASH_DURATION;
     p.dashVx = ddx * DASH_SPEED;
@@ -260,6 +331,16 @@ function update(s: GameState, dt: number) {
     }
   });
 
+  // ─── Combo decay ────────────────────────────────────────────────────────────
+  if (s.combo > 0) {
+    s.comboTimer -= dt;
+    if (s.comboTimer <= 0) {
+      s.combo = 0;
+      s.comboTimer = 0;
+    }
+  }
+  if (s.comboDisplayTimer > 0) s.comboDisplayTimer -= dt;
+
   // ─── MG Spawner ─────────────────────────────────────────────────────────────
   s.mgSpawnTimer -= dt;
   if (s.mgSpawnTimer <= 0) {
@@ -271,7 +352,6 @@ function update(s: GameState, dt: number) {
     }
   }
 
-  // Salvo fire
   if (s.mgSalvoQueue.length > 0) {
     s.mgSalvoTimer -= dt;
     if (s.mgSalvoTimer <= 0) {
@@ -281,11 +361,7 @@ function update(s: GameState, dt: number) {
       const oy = H + 40;
       const dx = Math.cos(entry.angle);
       const dy = Math.sin(entry.angle);
-      s.mgTelegraphs.push({
-        id: s.nextId++,
-        ox, oy, dx, dy,
-        timeLeft: MG_TELEGRAPH_DELAY,
-      });
+      s.mgTelegraphs.push({ id: s.nextId++, ox, oy, dx, dy, timeLeft: MG_TELEGRAPH_DELAY });
     }
   }
 
@@ -294,14 +370,9 @@ function update(s: GameState, dt: number) {
     t.timeLeft -= dt;
     if (t.timeLeft <= 0) {
       s.mgShots.push({
-        id: t.id,
-        ox: t.ox, oy: t.oy,
-        dx: t.dx, dy: t.dy,
-        timeLeft: MG_SHOT_DURATION,
-        tickTimer: 0,
-        hitParts: new Set(),
-        hitSoldiers: new Set(),
-        done: false,
+        id: t.id, ox: t.ox, oy: t.oy, dx: t.dx, dy: t.dy,
+        timeLeft: MG_SHOT_DURATION, tickTimer: 0,
+        hitParts: new Set(), hitSoldiers: new Set(), done: false,
       });
       return false;
     }
@@ -312,12 +383,10 @@ function update(s: GameState, dt: number) {
   s.mgShots = s.mgShots.filter(shot => {
     shot.timeLeft -= dt;
     if (shot.timeLeft <= 0 || shot.done) return false;
-
     shot.tickTimer -= dt;
     if (shot.tickTimer <= 0) {
       shot.tickTimer = MG_SHOT_TICK;
 
-      // Check player parts
       if (p.iframeTimer <= 0) {
         let firstHitDist = Infinity;
         let firstHitPart = -1;
@@ -330,21 +399,17 @@ function update(s: GameState, dt: number) {
           if (dSq < (MG_SHOT_WIDTH * 0.5 + PART_RADIUS) ** 2) {
             const proj = projOnBeam(wx, wy, shot.ox, shot.oy, shot.dx, shot.dy);
             if (proj >= 0 && proj <= MG_LENGTH && proj < firstHitDist) {
-              firstHitDist = proj;
-              firstHitPart = i;
+              firstHitDist = proj; firstHitPart = i;
             }
           }
         });
         if (firstHitPart >= 0) {
-          const pt = p.parts[firstHitPart];
-          pt.alive = false;
-          pt.flashing = false;
           shot.hitParts.add(firstHitPart);
+          hitPlayerPart(s, firstHitPart);
           shot.done = true;
         }
       }
 
-      // Check soldiers
       if (!shot.done) {
         let firstHitDist = Infinity;
         let firstHitSoldier = -1;
@@ -355,16 +420,18 @@ function update(s: GameState, dt: number) {
           if (dSq < (MG_SHOT_WIDTH * 0.5 + SOLDIER_SIZE) ** 2) {
             const proj = projOnBeam(sol.x, sol.y, shot.ox, shot.oy, shot.dx, shot.dy);
             if (proj >= 0 && proj <= MG_LENGTH && proj < firstHitDist) {
-              firstHitDist = proj;
-              firstHitSoldier = i;
+              firstHitDist = proj; firstHitSoldier = i;
             }
           }
         });
         if (firstHitSoldier >= 0) {
-          const sol = s.soldiers[firstHitSoldier];
-          sol.alive = false;
+          s.soldiers[firstHitSoldier].alive = false;
           shot.hitSoldiers.add(firstHitSoldier);
           shot.done = true;
+          // Combo!
+          s.combo++;
+          s.comboTimer = COMBO_WINDOW;
+          s.comboDisplayTimer = 1.4;
         }
       }
     }
@@ -379,30 +446,25 @@ function update(s: GameState, dt: number) {
     for (let i = 0; i < count; i++) {
       s.expTelegraphs.push({
         id: s.nextId++,
-        x: rand(60, W - 60),
-        y: rand(60, H - 60),
+        x: rand(60, W - 60), y: rand(60, H - 60),
         timeLeft: EXP_TELEGRAPH_DELAY,
       });
     }
   }
 
-  // Telegraph -> Explosion
   s.expTelegraphs = s.expTelegraphs.filter(t => {
     t.timeLeft -= dt;
     if (t.timeLeft <= 0) {
       s.explosions.push({
-        id: t.id,
-        x: t.x, y: t.y,
+        id: t.id, x: t.x, y: t.y,
         timeLeft: EXP_DURATION,
-        hitParts: new Set(),
-        hitSoldiers: new Set(),
+        hitParts: new Set(), hitSoldiers: new Set(),
       });
       return false;
     }
     return true;
   });
 
-  // Explosions
   s.explosions = s.explosions.filter(exp => {
     exp.timeLeft -= dt;
     if (exp.timeLeft <= 0) return false;
@@ -415,7 +477,7 @@ function update(s: GameState, dt: number) {
         const dist = Math.sqrt((wx - exp.x) ** 2 + (wy - exp.y) ** 2);
         if (dist < EXP_RADIUS) {
           exp.hitParts.add(i);
-          pt.alive = false;
+          hitPlayerPart(s, i);
         }
       });
     }
@@ -426,6 +488,10 @@ function update(s: GameState, dt: number) {
       if (dist < EXP_RADIUS) {
         exp.hitSoldiers.add(i);
         sol.alive = false;
+        // Combo!
+        s.combo++;
+        s.comboTimer = COMBO_WINDOW;
+        s.comboDisplayTimer = 1.4;
       }
     });
 
@@ -437,13 +503,11 @@ function update(s: GameState, dt: number) {
     if (!sol.alive) {
       sol.flashTimer -= dt;
       if (sol.flashTimer <= 0) {
-        // Respawn off-screen
         const ns = makeSoldier(sol.id);
         s.soldiers[i] = { ...ns, alive: true };
       }
       return;
     }
-
     sol.wanderTimer -= dt;
     if (sol.wanderTimer <= 0) {
       sol.wanderTimer = rand(1, 3);
@@ -453,26 +517,143 @@ function update(s: GameState, dt: number) {
     }
     sol.x += sol.vx * dt;
     sol.y += sol.vy * dt;
-
-    // Wrap around
     if (sol.x < -30) sol.x = W + 20;
     if (sol.x > W + 30) sol.x = -20;
     if (sol.y < -30) sol.y = H + 20;
     if (sol.y > H + 30) sol.y = -20;
   });
 
-  // Check dead soldiers (mark with flash timer for respawn)
   s.soldiers.forEach(sol => {
-    if (!sol.alive && sol.flashTimer === 0) {
-      sol.flashTimer = rand(2, 5);
+    if (!sol.alive && sol.flashTimer === 0) sol.flashTimer = rand(2, 5);
+  });
+
+  // ─── NEW: Shield Pickup Spawner ──────────────────────────────────────────────
+  s.shieldSpawnTimer -= dt;
+  if (s.shieldSpawnTimer <= 0) {
+    s.shieldSpawnTimer = rand(SHIELD_SPAWN_INTERVAL_MIN, SHIELD_SPAWN_INTERVAL_MAX);
+    if (s.shieldPickups.length < 2) {
+      s.shieldPickups.push({
+        id: s.nextId++,
+        x: rand(80, W - 80),
+        y: rand(80, H - 80),
+        lifetime: SHIELD_LIFETIME,
+        pulseTimer: 0,
+      });
     }
+  }
+
+  // Shield pickup collection & decay
+  s.shieldPickups = s.shieldPickups.filter(pickup => {
+    pickup.lifetime -= dt;
+    pickup.pulseTimer += dt;
+    if (pickup.lifetime <= 0) return false;
+
+    const dist = Math.sqrt((p.x - pickup.x) ** 2 + (p.y - pickup.y) ** 2);
+    if (dist < SHIELD_PICKUP_RADIUS + 20) {
+      p.shielded = true;
+      return false; // collected
+    }
+    return true;
+  });
+
+  // ─── NEW: Homing Missile Spawner ─────────────────────────────────────────────
+  s.missileSpawnTimer -= dt;
+  if (s.missileSpawnTimer <= 0) {
+    s.missileSpawnTimer = rand(MISSILE_SPAWN_INTERVAL_MIN, MISSILE_SPAWN_INTERVAL_MAX);
+    const count = Math.random() < 0.35 ? 2 : 1;
+    for (let i = 0; i < count; i++) {
+      // Spawn from a random edge
+      const edge = Math.floor(Math.random() * 4);
+      let sx = 0, sy = 0;
+      if (edge === 0) { sx = rand(50, W - 50); sy = -30; }
+      else if (edge === 1) { sx = W + 30; sy = rand(50, H - 50); }
+      else if (edge === 2) { sx = rand(50, W - 50); sy = H + 30; }
+      else { sx = -30; sy = rand(50, H - 50); }
+      s.missiles.push({
+        id: s.nextId++,
+        x: sx, y: sy,
+        vx: 0, vy: 0,
+        speed: MISSILE_SPEED_INITIAL,
+        telegraphTimer: MISSILE_TELEGRAPH_DURATION,
+        alive: true,
+        trailPoints: [],
+      });
+    }
+  }
+
+  // Homing missiles update
+  s.missiles = s.missiles.filter(missile => {
+    if (!missile.alive) return false;
+
+    // Telegraph phase — blink in place, no movement
+    if (missile.telegraphTimer > 0) {
+      missile.telegraphTimer -= dt;
+      return true;
+    }
+
+    // Find nearest alive player part to home toward
+    let targetX = p.x, targetY = p.y;
+    let minDist = Infinity;
+    p.parts.forEach((pt, i) => {
+      if (!pt.alive) return;
+      const wx = p.x + PART_OFFSETS[i].x;
+      const wy = p.y + PART_OFFSETS[i].y;
+      const d = Math.sqrt((missile.x - wx) ** 2 + (missile.y - wy) ** 2);
+      if (d < minDist) { minDist = d; targetX = wx; targetY = wy; }
+    });
+
+    // Steer toward target
+    const tdx = targetX - missile.x;
+    const tdy = targetY - missile.y;
+    const tlen = Math.sqrt(tdx * tdx + tdy * tdy);
+    if (tlen > 0) {
+      missile.vx = (tdx / tlen) * missile.speed;
+      missile.vy = (tdy / tlen) * missile.speed;
+    }
+    missile.speed = Math.min(missile.speed + MISSILE_ACCEL * dt, MISSILE_SPEED_MAX);
+
+    missile.x += missile.vx * dt;
+    missile.y += missile.vy * dt;
+
+    // Trail
+    missile.trailPoints.push({ x: missile.x, y: missile.y });
+    if (missile.trailPoints.length > 18) missile.trailPoints.shift();
+
+    // Despawn if too far out
+    if (missile.x < -100 || missile.x > W + 100 || missile.y < -100 || missile.y > H + 100) {
+      return false;
+    }
+
+    // Collision with player parts
+    if (p.iframeTimer <= 0) {
+      for (let i = 0; i < p.parts.length; i++) {
+        if (!p.parts[i].alive) continue;
+        const wx = p.x + PART_OFFSETS[i].x;
+        const wy = p.y + PART_OFFSETS[i].y;
+        const dist = Math.sqrt((missile.x - wx) ** 2 + (missile.y - wy) ** 2);
+        if (dist < MISSILE_HIT_RADIUS + PART_RADIUS) {
+          // Explode
+          s.explosions.push({
+            id: s.nextId++,
+            x: missile.x, y: missile.y,
+            timeLeft: EXP_DURATION * 0.7,
+            hitParts: new Set([i]),
+            hitSoldiers: new Set(),
+          });
+          hitPlayerPart(s, i);
+          missile.alive = false;
+          s.screenShake = Math.max(s.screenShake, 0.28);
+          return false;
+        }
+      }
+    }
+
+    return true;
   });
 
   // ─── Death check ─────────────────────────────────────────────────────────────
   const aliveParts = p.parts.filter(pt => pt.alive).length;
-  if (aliveParts === 0) {
-    s.phase = "dead";
-  }
+  if (aliveParts === 0) s.phase = "dead";
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -488,12 +669,40 @@ function drawTriangle(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: 
   ctx.closePath();
 }
 
+function drawHexagon(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI) / 3 - Math.PI / 6;
+    const px = cx + Math.cos(a) * r;
+    const py = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+function drawDiamond(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.lineTo(cx + r * 0.65, cy);
+  ctx.lineTo(cx, cy + r);
+  ctx.lineTo(cx - r * 0.65, cy);
+  ctx.closePath();
+}
+
 function render(ctx: CanvasRenderingContext2D, s: GameState) {
+  // Screen shake
+  ctx.save();
+  if (s.screenShake > 0) {
+    const sx = (Math.random() - 0.5) * s.screenShake * 18;
+    const sy = (Math.random() - 0.5) * s.screenShake * 18;
+    ctx.translate(sx, sy);
+  }
+
   // Background
   ctx.fillStyle = "#0a0c10";
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(-20, -20, W + 40, H + 40);
 
-  // Grid lines (subtle)
+  // Grid lines
   ctx.strokeStyle = "rgba(255,255,255,0.03)";
   ctx.lineWidth = 1;
   for (let x = 0; x < W; x += 40) {
@@ -504,6 +713,34 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
   }
 
   const p = s.player;
+  const now = Date.now();
+
+  // ─── NEW: Shield Pickups ──────────────────────────────────────────────────
+  s.shieldPickups.forEach(pickup => {
+    const pulse = Math.sin(pickup.pulseTimer * 4) * 0.5 + 0.5;
+    const fadeAlpha = pickup.lifetime < 3 ? pickup.lifetime / 3 : 1;
+    ctx.save();
+    ctx.shadowColor = `rgba(0,220,255,${0.6 * fadeAlpha})`;
+    ctx.shadowBlur = 16 + pulse * 10;
+    ctx.strokeStyle = `rgba(0,220,255,${(0.7 + 0.3 * pulse) * fadeAlpha})`;
+    ctx.fillStyle = `rgba(0,180,255,${0.12 * fadeAlpha})`;
+    ctx.lineWidth = 2;
+    drawHexagon(ctx, pickup.x, pickup.y, 16 + pulse * 3);
+    ctx.fill();
+    ctx.stroke();
+    // Inner dot
+    ctx.fillStyle = `rgba(100,240,255,${(0.6 + 0.4 * pulse) * fadeAlpha})`;
+    ctx.beginPath();
+    ctx.arc(pickup.x, pickup.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Label
+    ctx.fillStyle = `rgba(180,240,255,${0.8 * fadeAlpha})`;
+    ctx.font = "bold 9px monospace";
+    ctx.textAlign = "center";
+    ctx.shadowBlur = 0;
+    ctx.fillText("SHIELD", pickup.x, pickup.y + 26);
+    ctx.restore();
+  });
 
   // ─── Soldiers ────────────────────────────────────────────────────────────────
   s.soldiers.forEach(sol => {
@@ -523,7 +760,7 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.strokeStyle = `rgba(255,165,0,${alpha})`;
     ctx.lineWidth = MG_TELEGRAPH_WIDTH;
     ctx.setLineDash([12, 8]);
-    ctx.lineDashOffset = -(Date.now() * 0.05 % 20);
+    ctx.lineDashOffset = -(now * 0.05 % 20);
     ctx.shadowColor = "rgba(255,140,0,0.6)";
     ctx.shadowBlur = 10;
     ctx.beginPath();
@@ -560,14 +797,9 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.setLineDash([8, 6]);
     ctx.shadowColor = "rgba(255,140,0,0.5)";
     ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.arc(t.x, t.y, r, 0, Math.PI * 2);
-    ctx.stroke();
-    // Center dot
+    ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = `rgba(255,200,0,${alpha * 0.6})`;
-    ctx.beginPath();
-    ctx.arc(t.x, t.y, 4, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(t.x, t.y, 4, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   });
 
@@ -577,40 +809,109 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     const alpha = 1 - progress * progress;
     const outerR = EXP_RADIUS * (0.6 + 0.4 * progress);
     ctx.save();
-    // Fill
     const grad = ctx.createRadialGradient(exp.x, exp.y, 0, exp.x, exp.y, outerR);
     grad.addColorStop(0, `rgba(255,220,100,${alpha * 0.6})`);
     grad.addColorStop(0.4, `rgba(255,80,20,${alpha * 0.4})`);
     grad.addColorStop(1, `rgba(255,0,0,0)`);
     ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(exp.x, exp.y, outerR, 0, Math.PI * 2);
-    ctx.fill();
-    // Ring
+    ctx.beginPath(); ctx.arc(exp.x, exp.y, outerR, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = `rgba(255,100,0,${alpha})`;
     ctx.lineWidth = 3;
     ctx.setLineDash([]);
     ctx.shadowColor = "rgba(255,50,0,0.8)";
     ctx.shadowBlur = 20;
-    ctx.beginPath();
-    ctx.arc(exp.x, exp.y, outerR, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(exp.x, exp.y, outerR, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  });
+
+  // ─── NEW: Homing Missiles ─────────────────────────────────────────────────
+  s.missiles.forEach(missile => {
+    if (!missile.alive) return;
+
+    if (missile.telegraphTimer > 0) {
+      // Telegraph: flashing warning diamond at spawn position
+      const blink = Math.floor(now / 120) % 2 === 0;
+      if (blink) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(220,80,255,0.9)";
+        ctx.fillStyle = "rgba(180,0,255,0.15)";
+        ctx.shadowColor = "rgba(200,0,255,0.8)";
+        ctx.shadowBlur = 18;
+        ctx.lineWidth = 2;
+        drawDiamond(ctx, missile.x, missile.y, 14);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+      return;
+    }
+
+    // Trail
+    for (let i = 1; i < missile.trailPoints.length; i++) {
+      const tp = missile.trailPoints[i - 1];
+      const tc = missile.trailPoints[i];
+      const a = (i / missile.trailPoints.length) * 0.5;
+      ctx.save();
+      ctx.strokeStyle = `rgba(200,60,255,${a})`;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = "rgba(180,0,255,0.5)";
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.moveTo(tp.x, tp.y);
+      ctx.lineTo(tc.x, tc.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Missile body
+    const spin = (now * 0.003) % (Math.PI * 2);
+    ctx.save();
+    ctx.strokeStyle = "rgba(220,80,255,1)";
+    ctx.fillStyle = "rgba(180,0,255,0.35)";
+    ctx.shadowColor = "rgba(200,0,255,0.9)";
+    ctx.shadowBlur = 22;
+    ctx.lineWidth = 2;
+    drawDiamond(ctx, missile.x, missile.y, 12 + Math.sin(spin * 3) * 2);
+    ctx.fill();
     ctx.stroke();
+    // Core dot
+    ctx.fillStyle = "#ff88ff";
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(missile.x, missile.y, 3, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   });
 
   // ─── Player ──────────────────────────────────────────────────────────────────
   const isInvuln = p.iframeTimer > 0;
-  const blink = isInvuln && p.grace <= 0 && Math.floor(Date.now() / 80) % 2 === 0;
+  const blink = isInvuln && p.grace <= 0 && Math.floor(now / 80) % 2 === 0;
+  const shieldAbsorbing = p.shieldFlashTimer > 0;
+
+  // Shield ring around player
+  if (p.shielded || shieldAbsorbing) {
+    const ringPulse = Math.sin(now * 0.006) * 0.3 + 0.7;
+    const ringAlpha = shieldAbsorbing ? p.shieldFlashTimer / 0.5 : ringPulse;
+    ctx.save();
+    ctx.strokeStyle = shieldAbsorbing
+      ? `rgba(255,255,255,${ringAlpha})`
+      : `rgba(0,220,255,${ringAlpha * 0.9})`;
+    ctx.lineWidth = shieldAbsorbing ? 4 : 2.5;
+    ctx.shadowColor = shieldAbsorbing ? "rgba(200,240,255,1)" : "rgba(0,200,255,0.8)";
+    ctx.shadowBlur = shieldAbsorbing ? 30 : 16;
+    ctx.setLineDash(shieldAbsorbing ? [] : [6, 4]);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 38 + (shieldAbsorbing ? p.shieldFlashTimer * 20 : 0), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   p.parts.forEach((pt, i) => {
     if (!pt.alive) return;
     const wx = p.x + PART_OFFSETS[i].x;
     const wy = p.y + PART_OFFSETS[i].y;
-
     ctx.save();
-    if (blink) {
-      ctx.globalAlpha = 0.35;
-    }
+    if (blink) ctx.globalAlpha = 0.35;
     ctx.shadowColor = isInvuln ? "rgba(100,200,255,0.9)" : "rgba(100,255,120,0.7)";
     ctx.shadowBlur = isInvuln ? 20 : 12;
     ctx.strokeStyle = isInvuln ? "#7de8ff" : "#88ff99";
@@ -624,12 +925,11 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
 
   // Dash trail
   if (p.dashing) {
-    const aliveParts = p.parts.filter(pt => pt.alive);
     const alpha = p.dashTimer / DASH_DURATION;
-    aliveParts.forEach((pt, i) => {
-      const ri = p.parts.indexOf(pt);
-      const wx = p.x + PART_OFFSETS[ri].x - p.dashVx * 0.04;
-      const wy = p.y + PART_OFFSETS[ri].y - p.dashVy * 0.04;
+    p.parts.forEach((pt, i) => {
+      if (!pt.alive) return;
+      const wx = p.x + PART_OFFSETS[i].x - p.dashVx * 0.04;
+      const wy = p.y + PART_OFFSETS[i].y - p.dashVy * 0.04;
       ctx.save();
       ctx.globalAlpha = alpha * 0.4;
       ctx.strokeStyle = "#88ddff";
@@ -658,15 +958,69 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.restore();
   }
 
-  // Score
+  // Shield HUD icon
   ctx.save();
-  ctx.fillStyle = "#ffffff";
+  ctx.shadowColor = p.shielded ? "rgba(0,220,255,0.9)" : "rgba(80,120,140,0.3)";
+  ctx.shadowBlur = p.shielded ? 12 : 4;
+  ctx.strokeStyle = p.shielded ? "#00ddff" : "rgba(80,120,140,0.4)";
+  ctx.fillStyle = p.shielded ? "rgba(0,180,255,0.2)" : "rgba(20,40,50,0.3)";
+  ctx.lineWidth = 1.5;
+  drawHexagon(ctx, 130, 24, 10);
+  ctx.fill();
+  ctx.stroke();
+  if (p.shielded) {
+    ctx.fillStyle = "rgba(0,220,255,0.8)";
+    ctx.font = "bold 8px monospace";
+    ctx.textAlign = "center";
+    ctx.shadowBlur = 0;
+    ctx.fillText("SHD", 130, 41);
+  }
+  ctx.restore();
+
+  // Score
+  const multiplier = s.combo >= 2 ? Math.min(s.combo, COMBO_MAX_MULTIPLIER) : 1;
+  ctx.save();
+  ctx.fillStyle = multiplier > 1 ? "#ffdd66" : "#ffffff";
   ctx.font = "bold 18px 'Oxanium', monospace";
   ctx.textAlign = "right";
-  ctx.shadowColor = "rgba(255,255,255,0.3)";
+  ctx.shadowColor = multiplier > 1 ? "rgba(255,220,60,0.5)" : "rgba(255,255,255,0.3)";
   ctx.shadowBlur = 8;
   ctx.fillText(`${Math.floor(s.score)}s`, W - 20, 30);
   ctx.restore();
+
+  // ─── NEW: Combo display ───────────────────────────────────────────────────
+  if (s.combo >= 2 && s.comboDisplayTimer > 0) {
+    const comboAlpha = Math.min(s.comboDisplayTimer, 0.5) / 0.5;
+    const m = Math.min(s.combo, COMBO_MAX_MULTIPLIER);
+    const pulse = Math.sin(now * 0.012) * 0.1 + 1;
+    ctx.save();
+    ctx.textAlign = "right";
+    ctx.globalAlpha = comboAlpha;
+
+    // Badge bg
+    ctx.fillStyle = "rgba(30,20,0,0.6)";
+    ctx.beginPath();
+    ctx.roundRect(W - 160, 38, 140, 36, 6);
+    ctx.fill();
+
+    ctx.shadowColor = "rgba(255,200,0,0.8)";
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = "#ffdd66";
+    ctx.font = `bold ${Math.floor(22 * pulse)}px 'Oxanium', monospace`;
+    ctx.fillText(`x${m} COMBO`, W - 24, 62);
+    ctx.restore();
+  }
+
+  // Kills remaining in combo window (bar)
+  if (s.combo >= 2 && s.comboTimer > 0) {
+    const frac = s.comboTimer / COMBO_WINDOW;
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(W - 160, 76, 140, 4);
+    ctx.fillStyle = `rgba(255,200,60,${0.6 + 0.4 * frac})`;
+    ctx.fillRect(W - 160, 76, 140 * frac, 4);
+    ctx.restore();
+  }
 
   // Dash cooldown bar
   if (p.dashCooldown > 0) {
@@ -678,12 +1032,14 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.fillRect(20, H - 16, 100 * (1 - frac), 6);
     ctx.fillStyle = "rgba(255,255,255,0.4)";
     ctx.font = "10px monospace";
+    ctx.textAlign = "left";
     ctx.fillText("DASH", 20, H - 22);
     ctx.restore();
   } else {
     ctx.save();
     ctx.fillStyle = "rgba(100,200,255,0.5)";
     ctx.font = "bold 10px monospace";
+    ctx.textAlign = "left";
     ctx.fillText("DASH READY", 20, H - 22);
     ctx.restore();
   }
@@ -699,46 +1055,50 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.restore();
   }
 
+  ctx.restore(); // end screen shake transform
+
   // ─── Menu screen ─────────────────────────────────────────────────────────────
   if (s.phase === "menu") {
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.7)";
     ctx.fillRect(0, 0, W, H);
-
     ctx.textAlign = "center";
 
-    // Title
     ctx.font = "bold 64px 'Oxanium', monospace";
     ctx.fillStyle = "#88ff99";
     ctx.shadowColor = "rgba(100,255,120,0.8)";
     ctx.shadowBlur = 30;
-    ctx.fillText("RUNAWAY TROOPERS", W / 2, H / 2 - 80);
+    ctx.fillText("RUNAWAY TROOPERS", W / 2, H / 2 - 90);
 
-    // Subtitle
     ctx.font = "18px 'Oxanium', monospace";
     ctx.fillStyle = "rgba(200,220,255,0.8)";
     ctx.shadowBlur = 0;
-    ctx.fillText("2D TOP-DOWN SURVIVAL ARCADE", W / 2, H / 2 - 38);
+    ctx.fillText("2D TOP-DOWN SURVIVAL ARCADE", W / 2, H / 2 - 50);
 
-    // Instructions
-    ctx.font = "14px monospace";
+    ctx.font = "13px monospace";
     ctx.fillStyle = "rgba(160,180,200,0.8)";
-    ctx.fillText("WASD / ARROW KEYS  —  Move", W / 2, H / 2 + 20);
-    ctx.fillText("SPACE  —  Dash (i-frames)", W / 2, H / 2 + 42);
+    ctx.fillText("WASD / ARROWS  —  Move       SPACE  —  Dash (i-frames)", W / 2, H / 2 + 10);
 
-    // Lives display
+    ctx.font = "13px monospace";
+    ctx.fillStyle = "rgba(0,220,200,0.7)";
+    ctx.fillText("⬡ Collect SHIELD pickups to absorb one hit", W / 2, H / 2 + 36);
+
+    ctx.fillStyle = "rgba(200,100,255,0.7)";
+    ctx.fillText("◆ Homing missiles track you — dodge carefully", W / 2, H / 2 + 58);
+
+    ctx.fillStyle = "rgba(255,210,60,0.7)";
+    ctx.fillText("☆ Kill soldiers in quick succession for a COMBO MULTIPLIER", W / 2, H / 2 + 80);
+
     ctx.fillStyle = "rgba(100,255,130,0.9)";
     ctx.shadowColor = "rgba(100,255,120,0.8)";
     ctx.shadowBlur = 15;
-    ctx.font = "bold 26px 'Oxanium', monospace";
-    ctx.fillText("▲  ▲  ▲   =  3 LIVES", W / 2, H / 2 + 90);
+    ctx.font = "bold 22px 'Oxanium', monospace";
+    ctx.fillText("▲  ▲  ▲   =  3 LIVES", W / 2, H / 2 + 116);
 
-    // Start prompt
     ctx.shadowBlur = 0;
     ctx.font = "bold 20px 'Oxanium', monospace";
-    ctx.fillStyle = Math.floor(Date.now() / 500) % 2 === 0 ? "#ffffff" : "rgba(255,255,255,0.4)";
-    ctx.fillText("PRESS ENTER OR CLICK TO START", W / 2, H / 2 + 140);
-
+    ctx.fillStyle = Math.floor(now / 500) % 2 === 0 ? "#ffffff" : "rgba(255,255,255,0.4)";
+    ctx.fillText("PRESS ENTER OR CLICK TO START", W / 2, H / 2 + 158);
     ctx.restore();
   }
 
@@ -747,7 +1107,6 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.72)";
     ctx.fillRect(0, 0, W, H);
-
     ctx.textAlign = "center";
 
     ctx.font = "bold 56px 'Oxanium', monospace";
@@ -777,9 +1136,8 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
 
     ctx.shadowBlur = 0;
     ctx.font = "bold 18px 'Oxanium', monospace";
-    ctx.fillStyle = Math.floor(Date.now() / 500) % 2 === 0 ? "#ffffff" : "rgba(255,255,255,0.4)";
+    ctx.fillStyle = Math.floor(now / 500) % 2 === 0 ? "#ffffff" : "rgba(255,255,255,0.4)";
     ctx.fillText("PRESS ENTER OR CLICK TO RETRY", W / 2, H / 2 + 120);
-
     ctx.restore();
   }
 }
@@ -803,7 +1161,7 @@ export default function Game() {
     const handleKey = (e: KeyboardEvent) => {
       if (e.type === "keydown") {
         s.keys.add(e.key);
-        if ((e.key === "Enter") && (s.phase === "menu" || s.phase === "dead")) {
+        if (e.key === "Enter" && (s.phase === "menu" || s.phase === "dead")) {
           startGame();
         }
         if (e.key === " " || e.key === "ArrowUp" || e.key === "ArrowDown") {
@@ -815,9 +1173,7 @@ export default function Game() {
     };
 
     const handleClick = () => {
-      if (s.phase === "menu" || s.phase === "dead") {
-        startGame();
-      }
+      if (s.phase === "menu" || s.phase === "dead") startGame();
     };
 
     function startGame() {
@@ -872,7 +1228,7 @@ export default function Game() {
         />
       </div>
       <div className="mt-3 text-xs text-center" style={{ color: "rgba(100,130,120,0.6)", fontFamily: "monospace" }}>
-        WASD / ARROWS to move &nbsp;•&nbsp; SPACE to dash (invincible during dash)
+        WASD / ARROWS to move &nbsp;•&nbsp; SPACE to dash &nbsp;•&nbsp; Collect ⬡ shields &nbsp;•&nbsp; Kill soldiers fast for combo multiplier
       </div>
     </div>
   );

@@ -42,13 +42,13 @@ const SHIELD_PICKUP_RADIUS = 22;
 const SHIELD_LIFETIME = 14; // seconds before it despawns
 
 // ── NEW: Homing missile ─────────────────────────────────────────────────────
-const MISSILE_SPAWN_INTERVAL_MIN = 8;
-const MISSILE_SPAWN_INTERVAL_MAX = 16;
-const MISSILE_TELEGRAPH_DURATION = 1.2;
-const MISSILE_SPEED_INITIAL = 70;
-const MISSILE_SPEED_MAX = 210;
-const MISSILE_ACCEL = 55;
-const MISSILE_HIT_RADIUS = 14;
+const MISSILE_SPAWN_INTERVAL_MIN = 13;
+const MISSILE_SPAWN_INTERVAL_MAX = 24;
+const MISSILE_TELEGRAPH_DURATION = 1.4;
+const MISSILE_SPEED_INITIAL = 55;
+const MISSILE_SPEED_MAX = 145;
+const MISSILE_ACCEL = 28;
+const MISSILE_HIT_RADIUS = 12;
 const MISSILE_BLAST_RADIUS = 40;
 
 // ── NEW: Kill combo ─────────────────────────────────────────────────────────
@@ -337,17 +337,24 @@ function update(s: GameState, dt: number) {
 
   // ─── Personality updates ─────────────────────────────────────────────────────
   const moveSpeed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-  // Part 1 (slow/slack): smoothly lags opposite to movement direction
+  // Part 0 (brave): very subtle shiver — degree 1
+  if (p.parts[0].alive) {
+    p.parts[0].shakeX = (Math.random() - 0.5) * 0.7;
+    p.parts[0].shakeY = (Math.random() - 0.5) * 0.7;
+  }
+  // Part 1 (slow/slack): lags behind + medium shiver — degree 2
   if (p.parts[1].alive) {
     const lagTargetX = moveSpeed > 10 ? -(p.vx / moveSpeed) * 8 : 0;
     const lagTargetY = moveSpeed > 10 ? -(p.vy / moveSpeed) * 8 : 0;
     p.parts[1].lagX += (lagTargetX - p.parts[1].lagX) * Math.min(dt * 1.0, 1);
     p.parts[1].lagY += (lagTargetY - p.parts[1].lagY) * Math.min(dt * 1.0, 1);
+    p.parts[1].shakeX = (Math.random() - 0.5) * 1.5;
+    p.parts[1].shakeY = (Math.random() - 0.5) * 1.5;
   }
-  // Part 2 (anxious): rapid jitter, recomputed every frame
+  // Part 2 (anxious): strong jitter — degree 3
   if (p.parts[2].alive) {
-    p.parts[2].shakeX = (Math.random() - 0.5) * 1.4;
-    p.parts[2].shakeY = (Math.random() - 0.5) * 1.4;
+    p.parts[2].shakeX = (Math.random() - 0.5) * 2.6;
+    p.parts[2].shakeY = (Math.random() - 0.5) * 2.6;
   }
 
   // ─── MG Spawner ─────────────────────────────────────────────────────────────
@@ -951,8 +958,8 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
       // ── BRAVE: leans forward, faces movement dir, bold and bright ─────────
       const leanX = spd > 12 ? (p.vx / spd) * 3 : 0;
       const leanY = spd > 12 ? (p.vy / spd) * 3 : 0;
-      wx = p.x + PART_OFFSETS[0].x + leanX;
-      wy = p.y + PART_OFFSETS[0].y + leanY;
+      wx = p.x + PART_OFFSETS[0].x + leanX + pt.shakeX;
+      wy = p.y + PART_OFFSETS[0].y + leanY + pt.shakeY;
       // Subtle tilt toward movement dir — blend only 20% from default upward angle
       const defaultAngle = -Math.PI / 2;
       const tiltBlend = spd > 12 ? 0.22 : 0;
@@ -967,8 +974,8 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
       blur   = isInvuln ? 22 : 18;
     } else if (i === 1) {
       // ── SLOW/SLACK: lags behind, chunky/fat, slightly tilted ─────────────
-      wx = p.x + PART_OFFSETS[1].x + pt.lagX;
-      wy = p.y + PART_OFFSETS[1].y + pt.lagY;
+      wx = p.x + PART_OFFSETS[1].x + pt.lagX + pt.shakeX;
+      wy = p.y + PART_OFFSETS[1].y + pt.lagY + pt.shakeY;
       triAngle = -Math.PI / 2 + 0.28;   // leans away, slouching tilt
       triR = PART_RADIUS * 1.45;         // noticeably bigger / fat
       stroke = isInvuln ? "#77bbdd" : "#77bb88";

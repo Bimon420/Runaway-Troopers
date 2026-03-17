@@ -339,15 +339,15 @@ function update(s: GameState, dt: number) {
   const moveSpeed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
   // Part 1 (slow/slack): smoothly lags opposite to movement direction
   if (p.parts[1].alive) {
-    const lagTargetX = moveSpeed > 10 ? -(p.vx / moveSpeed) * 11 : 0;
-    const lagTargetY = moveSpeed > 10 ? -(p.vy / moveSpeed) * 11 : 0;
-    p.parts[1].lagX += (lagTargetX - p.parts[1].lagX) * Math.min(dt * 2.2, 1);
-    p.parts[1].lagY += (lagTargetY - p.parts[1].lagY) * Math.min(dt * 2.2, 1);
+    const lagTargetX = moveSpeed > 10 ? -(p.vx / moveSpeed) * 5 : 0;
+    const lagTargetY = moveSpeed > 10 ? -(p.vy / moveSpeed) * 5 : 0;
+    p.parts[1].lagX += (lagTargetX - p.parts[1].lagX) * Math.min(dt * 1.8, 1);
+    p.parts[1].lagY += (lagTargetY - p.parts[1].lagY) * Math.min(dt * 1.8, 1);
   }
   // Part 2 (anxious): rapid jitter, recomputed every frame
   if (p.parts[2].alive) {
-    p.parts[2].shakeX = (Math.random() - 0.5) * 3.8;
-    p.parts[2].shakeY = (Math.random() - 0.5) * 3.8;
+    p.parts[2].shakeX = (Math.random() - 0.5) * 2.2;
+    p.parts[2].shakeY = (Math.random() - 0.5) * 2.2;
   }
 
   // ─── MG Spawner ─────────────────────────────────────────────────────────────
@@ -935,11 +935,16 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
 
     if (i === 0) {
       // ── BRAVE: leans forward, faces movement dir, bold and bright ─────────
-      const leanX = spd > 12 ? (p.vx / spd) * 5 : 0;
-      const leanY = spd > 12 ? (p.vy / spd) * 5 : 0;
+      const leanX = spd > 12 ? (p.vx / spd) * 3 : 0;
+      const leanY = spd > 12 ? (p.vy / spd) * 3 : 0;
       wx = p.x + PART_OFFSETS[0].x + leanX;
       wy = p.y + PART_OFFSETS[0].y + leanY;
-      triAngle = moveDir;   // tip points in direction of travel
+      // Subtle tilt toward movement dir — blend only 20% from default upward angle
+      const defaultAngle = -Math.PI / 2;
+      const tiltBlend = spd > 12 ? 0.22 : 0;
+      const angleDiff = moveDir - defaultAngle;
+      const wrappedDiff = ((angleDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
+      triAngle = defaultAngle + wrappedDiff * tiltBlend;
       triR = PART_RADIUS * 1.22;
       stroke = isInvuln ? "#aaeeff" : "#bbffaa";
       fill   = isInvuln ? "rgba(120,230,255,0.32)" : "rgba(140,255,120,0.30)";

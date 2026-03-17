@@ -339,15 +339,15 @@ function update(s: GameState, dt: number) {
   const moveSpeed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
   // Part 1 (slow/slack): smoothly lags opposite to movement direction
   if (p.parts[1].alive) {
-    const lagTargetX = moveSpeed > 10 ? -(p.vx / moveSpeed) * 5 : 0;
-    const lagTargetY = moveSpeed > 10 ? -(p.vy / moveSpeed) * 5 : 0;
-    p.parts[1].lagX += (lagTargetX - p.parts[1].lagX) * Math.min(dt * 1.8, 1);
-    p.parts[1].lagY += (lagTargetY - p.parts[1].lagY) * Math.min(dt * 1.8, 1);
+    const lagTargetX = moveSpeed > 10 ? -(p.vx / moveSpeed) * 8 : 0;
+    const lagTargetY = moveSpeed > 10 ? -(p.vy / moveSpeed) * 8 : 0;
+    p.parts[1].lagX += (lagTargetX - p.parts[1].lagX) * Math.min(dt * 1.0, 1);
+    p.parts[1].lagY += (lagTargetY - p.parts[1].lagY) * Math.min(dt * 1.0, 1);
   }
   // Part 2 (anxious): rapid jitter, recomputed every frame
   if (p.parts[2].alive) {
-    p.parts[2].shakeX = (Math.random() - 0.5) * 2.2;
-    p.parts[2].shakeY = (Math.random() - 0.5) * 2.2;
+    p.parts[2].shakeX = (Math.random() - 0.5) * 1.4;
+    p.parts[2].shakeY = (Math.random() - 0.5) * 1.4;
   }
 
   // ─── MG Spawner ─────────────────────────────────────────────────────────────
@@ -952,16 +952,16 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
       lineW  = 2.5;
       blur   = isInvuln ? 22 : 18;
     } else if (i === 1) {
-      // ── SLOW/SLACK: lags behind, dimmer, slightly tilted ─────────────────
+      // ── SLOW/SLACK: lags behind, chunky/fat, slightly tilted ─────────────
       wx = p.x + PART_OFFSETS[1].x + pt.lagX;
       wy = p.y + PART_OFFSETS[1].y + pt.lagY;
       triAngle = -Math.PI / 2 + 0.28;   // leans away, slouching tilt
-      triR = PART_RADIUS * 0.84;
+      triR = PART_RADIUS * 1.45;         // noticeably bigger / fat
       stroke = isInvuln ? "#77bbdd" : "#77bb88";
-      fill   = isInvuln ? "rgba(80,170,210,0.14)" : "rgba(80,190,100,0.13)";
+      fill   = isInvuln ? "rgba(80,170,210,0.28)" : "rgba(80,190,100,0.26)";
       shadow = isInvuln ? "rgba(70,160,200,0.6)"  : "rgba(70,180,90,0.55)";
-      lineW  = 1.5;
-      blur   = isInvuln ? 12 : 8;
+      lineW  = 2.2;
+      blur   = isInvuln ? 12 : 9;
     } else {
       // ── ANXIOUS: shaky position, nervous wobble, slightly paler ──────────
       wx = p.x + PART_OFFSETS[2].x + pt.shakeX;

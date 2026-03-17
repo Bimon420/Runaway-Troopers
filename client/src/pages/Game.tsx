@@ -263,8 +263,7 @@ function hitPlayerPart(s: GameState, partIndex: number) {
 function update(s: GameState, dt: number) {
   if (s.phase !== "playing") return;
 
-  const multiplier = s.combo >= 2 ? Math.min(s.combo, COMBO_MAX_MULTIPLIER) : 1;
-  s.score += dt * multiplier;
+  s.score += dt;
   const p = s.player;
 
   // Screen shake decay
@@ -330,16 +329,6 @@ function update(s: GameState, dt: number) {
       if (pt.flashTimer <= 0) { pt.flashing = false; pt.flashTimer = 0; }
     }
   });
-
-  // ─── Combo decay ────────────────────────────────────────────────────────────
-  if (s.combo > 0) {
-    s.comboTimer -= dt;
-    if (s.comboTimer <= 0) {
-      s.combo = 0;
-      s.comboTimer = 0;
-    }
-  }
-  if (s.comboDisplayTimer > 0) s.comboDisplayTimer -= dt;
 
   // ─── MG Spawner ─────────────────────────────────────────────────────────────
   s.mgSpawnTimer -= dt;
@@ -410,30 +399,6 @@ function update(s: GameState, dt: number) {
         }
       }
 
-      if (!shot.done) {
-        let firstHitDist = Infinity;
-        let firstHitSoldier = -1;
-        s.soldiers.forEach((sol, i) => {
-          if (!sol.alive || shot.hitSoldiers.has(i)) return;
-          const dSq = pointLineDistSq(sol.x, sol.y, shot.ox, shot.oy,
-            shot.ox + shot.dx * MG_LENGTH, shot.oy + shot.dy * MG_LENGTH);
-          if (dSq < (MG_SHOT_WIDTH * 0.5 + SOLDIER_SIZE) ** 2) {
-            const proj = projOnBeam(sol.x, sol.y, shot.ox, shot.oy, shot.dx, shot.dy);
-            if (proj >= 0 && proj <= MG_LENGTH && proj < firstHitDist) {
-              firstHitDist = proj; firstHitSoldier = i;
-            }
-          }
-        });
-        if (firstHitSoldier >= 0) {
-          s.soldiers[firstHitSoldier].alive = false;
-          shot.hitSoldiers.add(firstHitSoldier);
-          shot.done = true;
-          // Combo!
-          s.combo++;
-          s.comboTimer = COMBO_WINDOW;
-          s.comboDisplayTimer = 1.4;
-        }
-      }
     }
     return true;
   });
@@ -482,32 +447,11 @@ function update(s: GameState, dt: number) {
       });
     }
 
-    s.soldiers.forEach((sol, i) => {
-      if (!sol.alive || exp.hitSoldiers.has(i)) return;
-      const dist = Math.sqrt((sol.x - exp.x) ** 2 + (sol.y - exp.y) ** 2);
-      if (dist < EXP_RADIUS) {
-        exp.hitSoldiers.add(i);
-        sol.alive = false;
-        // Combo!
-        s.combo++;
-        s.comboTimer = COMBO_WINDOW;
-        s.comboDisplayTimer = 1.4;
-      }
-    });
-
     return true;
   });
 
   // ─── Soldiers ────────────────────────────────────────────────────────────────
-  s.soldiers.forEach((sol, i) => {
-    if (!sol.alive) {
-      sol.flashTimer -= dt;
-      if (sol.flashTimer <= 0) {
-        const ns = makeSoldier(sol.id);
-        s.soldiers[i] = { ...ns, alive: true };
-      }
-      return;
-    }
+  s.soldiers.forEach((sol) => {
     sol.wanderTimer -= dt;
     if (sol.wanderTimer <= 0) {
       sol.wanderTimer = rand(1, 3);
@@ -521,10 +465,6 @@ function update(s: GameState, dt: number) {
     if (sol.x > W + 30) sol.x = -20;
     if (sol.y < -30) sol.y = H + 20;
     if (sol.y > H + 30) sol.y = -20;
-  });
-
-  s.soldiers.forEach(sol => {
-    if (!sol.alive && sol.flashTimer === 0) sol.flashTimer = rand(2, 5);
   });
 
   // ─── Player ↔ Soldier Collision (soldiers physically block the player) ───────
@@ -1035,49 +975,14 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
   ctx.restore();
 
   // Score
-  const multiplier = s.combo >= 2 ? Math.min(s.combo, COMBO_MAX_MULTIPLIER) : 1;
   ctx.save();
-  ctx.fillStyle = multiplier > 1 ? "#ffdd66" : "#ffffff";
+  ctx.fillStyle = "#ffffff";
   ctx.font = "bold 18px 'Oxanium', monospace";
   ctx.textAlign = "right";
-  ctx.shadowColor = multiplier > 1 ? "rgba(255,220,60,0.5)" : "rgba(255,255,255,0.3)";
+  ctx.shadowColor = "rgba(255,255,255,0.3)";
   ctx.shadowBlur = 8;
   ctx.fillText(`${Math.floor(s.score)}s`, W - 20, 30);
   ctx.restore();
-
-  // ─── NEW: Combo display ───────────────────────────────────────────────────
-  if (s.combo >= 2 && s.comboDisplayTimer > 0) {
-    const comboAlpha = Math.min(s.comboDisplayTimer, 0.5) / 0.5;
-    const m = Math.min(s.combo, COMBO_MAX_MULTIPLIER);
-    const pulse = Math.sin(now * 0.012) * 0.1 + 1;
-    ctx.save();
-    ctx.textAlign = "right";
-    ctx.globalAlpha = comboAlpha;
-
-    // Badge bg
-    ctx.fillStyle = "rgba(30,20,0,0.6)";
-    ctx.beginPath();
-    ctx.roundRect(W - 160, 38, 140, 36, 6);
-    ctx.fill();
-
-    ctx.shadowColor = "rgba(255,200,0,0.8)";
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = "#ffdd66";
-    ctx.font = `bold ${Math.floor(22 * pulse)}px 'Oxanium', monospace`;
-    ctx.fillText(`x${m} COMBO`, W - 24, 62);
-    ctx.restore();
-  }
-
-  // Kills remaining in combo window (bar)
-  if (s.combo >= 2 && s.comboTimer > 0) {
-    const frac = s.comboTimer / COMBO_WINDOW;
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.fillRect(W - 160, 76, 140, 4);
-    ctx.fillStyle = `rgba(255,200,60,${0.6 + 0.4 * frac})`;
-    ctx.fillRect(W - 160, 76, 140 * frac, 4);
-    ctx.restore();
-  }
 
   // Dash cooldown bar
   if (p.dashCooldown > 0) {
@@ -1143,8 +1048,8 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.fillStyle = "rgba(200,100,255,0.7)";
     ctx.fillText("◆ Homing missiles track you — dodge carefully", W / 2, H / 2 + 58);
 
-    ctx.fillStyle = "rgba(255,210,60,0.7)";
-    ctx.fillText("☆ Kill soldiers in quick succession for a COMBO MULTIPLIER", W / 2, H / 2 + 80);
+    ctx.fillStyle = "rgba(180,200,160,0.7)";
+    ctx.fillText("▲ Soldiers are obstacles — navigate around them", W / 2, H / 2 + 80);
 
     ctx.fillStyle = "rgba(100,255,130,0.9)";
     ctx.shadowColor = "rgba(100,255,120,0.8)";
@@ -1155,7 +1060,7 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.shadowBlur = 0;
     ctx.font = "bold 20px 'Oxanium', monospace";
     ctx.fillStyle = Math.floor(now / 500) % 2 === 0 ? "#ffffff" : "rgba(255,255,255,0.4)";
-    ctx.fillText("PRESS ENTER OR CLICK TO START", W / 2, H / 2 + 158);
+    ctx.fillText("PRESS ENTER OR CLICK TO START", W / 2, H / 2 + 155);
     ctx.restore();
   }
 
@@ -1285,7 +1190,7 @@ export default function Game() {
         />
       </div>
       <div className="mt-3 text-xs text-center" style={{ color: "rgba(100,130,120,0.6)", fontFamily: "monospace" }}>
-        WASD / ARROWS to move &nbsp;•&nbsp; SPACE to dash &nbsp;•&nbsp; Collect ⬡ shields &nbsp;•&nbsp; Kill soldiers fast for combo multiplier
+        WASD / ARROWS to move &nbsp;•&nbsp; SPACE to dash &nbsp;•&nbsp; Collect ⬡ shields &nbsp;•&nbsp; Soldiers block you — maneuver around them
       </div>
     </div>
   );

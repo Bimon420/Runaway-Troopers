@@ -686,6 +686,20 @@ function drawTriangle(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: 
   ctx.closePath();
 }
 
+// Elongated triangle: tip extends tipR, base vertices use baseR
+function drawElongatedTriangle(ctx: CanvasRenderingContext2D, cx: number, cy: number, tipR: number, baseR: number, angle = -Math.PI / 2) {
+  ctx.beginPath();
+  const tip = [cx + Math.cos(angle) * tipR, cy + Math.sin(angle) * tipR];
+  const b1a = angle + (Math.PI * 2) / 3;
+  const b2a = angle - (Math.PI * 2) / 3;
+  const b1 = [cx + Math.cos(b1a) * baseR, cy + Math.sin(b1a) * baseR];
+  const b2 = [cx + Math.cos(b2a) * baseR, cy + Math.sin(b2a) * baseR];
+  ctx.moveTo(tip[0], tip[1]);
+  ctx.lineTo(b1[0], b1[1]);
+  ctx.lineTo(b2[0], b2[1]);
+  ctx.closePath();
+}
+
 function drawHexagon(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
@@ -945,7 +959,7 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
       const angleDiff = moveDir - defaultAngle;
       const wrappedDiff = ((angleDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
       triAngle = defaultAngle + wrappedDiff * tiltBlend;
-      triR = PART_RADIUS * 1.22;
+      triR = PART_RADIUS * 0.88;
       stroke = isInvuln ? "#aaeeff" : "#bbffaa";
       fill   = isInvuln ? "rgba(120,230,255,0.32)" : "rgba(140,255,120,0.30)";
       shadow = isInvuln ? "rgba(100,210,255,1)"    : "rgba(100,255,80,0.95)";
@@ -984,7 +998,12 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.fillStyle   = fill;
     ctx.lineWidth   = lineW;
     ctx.setLineDash([]);
-    drawTriangle(ctx, wx, wy, triR, triAngle);
+    if (i === 1) {
+      // Fat/slow: elongated — long tip, chunky base
+      drawElongatedTriangle(ctx, wx, wy, triR * 1.5, triR * 0.9, triAngle);
+    } else {
+      drawTriangle(ctx, wx, wy, triR, triAngle);
+    }
     ctx.fill();
     ctx.stroke();
 

@@ -12,9 +12,9 @@ const DASH_COOLDOWN = 0.65;
 const START_GRACE = 1.2;
 const PART_RADIUS = 10;
 const PART_OFFSETS = [
-  { x: 0,   y: -22 },
-  { x: -20, y: 11  },
-  { x: 20,  y: 11  },
+  { x: 0,   y: -15 },   // front (brave)
+  { x: -13, y: 8   },   // left  (slow)
+  { x: 13,  y: 8   },   // right (anxious)
 ];
 const MG_TELEGRAPH_DELAY = 0.28;
 const MG_SHOT_DURATION = 0.38;
@@ -60,6 +60,11 @@ interface Part {
   alive: boolean;
   flashing: boolean;
   flashTimer: number;
+  // personality offsets (visual only, hitbox stays at base PART_OFFSETS)
+  lagX: number;    // slow part: lags behind movement
+  lagY: number;
+  shakeX: number;  // anxious part: jitter
+  shakeY: number;
 }
 
 interface Player {
@@ -172,7 +177,7 @@ function makePlayer(): Player {
     x: W / 2,
     y: H / 2,
     vx: 0, vy: 0,
-    parts: PART_OFFSETS.map(() => ({ alive: true, flashing: false, flashTimer: 0 })),
+    parts: PART_OFFSETS.map(() => ({ alive: true, flashing: false, flashTimer: 0, lagX: 0, lagY: 0, shakeX: 0, shakeY: 0 })),
     dashing: false,
     dashTimer: 0,
     dashVx: 0,
@@ -329,6 +334,21 @@ function update(s: GameState, dt: number) {
       if (pt.flashTimer <= 0) { pt.flashing = false; pt.flashTimer = 0; }
     }
   });
+
+  // ─── Personality updates ─────────────────────────────────────────────────────
+  const moveSpeed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+  // Part 1 (slow/slack): smoothly lags opposite to movement direction
+  if (p.parts[1].alive) {
+    const lagTargetX = moveSpeed > 10 ? -(p.vx / moveSpeed) * 11 : 0;
+    const lagTargetY = moveSpeed > 10 ? -(p.vy / moveSpeed) * 11 : 0;
+    p.parts[1].lagX += (lagTargetX - p.parts[1].lagX) * Math.min(dt * 2.2, 1);
+    p.parts[1].lagY += (lagTargetY - p.parts[1].lagY) * Math.min(dt * 2.2, 1);
+  }
+  // Part 2 (anxious): rapid jitter, recomputed every frame
+  if (p.parts[2].alive) {
+    p.parts[2].shakeX = (Math.random() - 0.5) * 3.8;
+    p.parts[2].shakeY = (Math.random() - 0.5) * 3.8;
+  }
 
   // ─── MG Spawner ─────────────────────────────────────────────────────────────
   s.mgSpawnTimer -= dt;
@@ -903,35 +923,117 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.restore();
   }
 
+  // ── Per-part personality rendering ──────────────────────────────────────────
+  const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+  const moveDir = spd > 12 ? Math.atan2(p.vy, p.vx) : -Math.PI / 2;
+
   p.parts.forEach((pt, i) => {
     if (!pt.alive) return;
-    const wx = p.x + PART_OFFSETS[i].x;
-    const wy = p.y + PART_OFFSETS[i].y;
+
+    let wx: number, wy: number, triAngle: number, triR: number;
+    let stroke: string, fill: string, shadow: string, lineW: number, blur: number;
+
+    if (i === 0) {
+      // ── BRAVE: leans forward, faces movement dir, bold and bright ─────────
+      const leanX = spd > 12 ? (p.vx / spd) * 5 : 0;
+      const leanY = spd > 12 ? (p.vy / spd) * 5 : 0;
+      wx = p.x + PART_OFFSETS[0].x + leanX;
+      wy = p.y + PART_OFFSETS[0].y + leanY;
+      triAngle = moveDir;   // tip points in direction of travel
+      triR = PART_RADIUS * 1.22;
+      stroke = isInvuln ? "#aaeeff" : "#bbffaa";
+      fill   = isInvuln ? "rgba(120,230,255,0.32)" : "rgba(140,255,120,0.30)";
+      shadow = isInvuln ? "rgba(100,210,255,1)"    : "rgba(100,255,80,0.95)";
+      lineW  = 2.5;
+      blur   = isInvuln ? 22 : 18;
+    } else if (i === 1) {
+      // ── SLOW/SLACK: lags behind, dimmer, slightly tilted ─────────────────
+      wx = p.x + PART_OFFSETS[1].x + pt.lagX;
+      wy = p.y + PART_OFFSETS[1].y + pt.lagY;
+      triAngle = -Math.PI / 2 + 0.28;   // leans away, slouching tilt
+      triR = PART_RADIUS * 0.84;
+      stroke = isInvuln ? "#77bbdd" : "#77bb88";
+      fill   = isInvuln ? "rgba(80,170,210,0.14)" : "rgba(80,190,100,0.13)";
+      shadow = isInvuln ? "rgba(70,160,200,0.6)"  : "rgba(70,180,90,0.55)";
+      lineW  = 1.5;
+      blur   = isInvuln ? 12 : 8;
+    } else {
+      // ── ANXIOUS: shaky position, nervous wobble, slightly paler ──────────
+      wx = p.x + PART_OFFSETS[2].x + pt.shakeX;
+      wy = p.y + PART_OFFSETS[2].y + pt.shakeY;
+      const wobble = Math.sin(now * 0.022) * 0.32;
+      triAngle = -Math.PI / 2 + wobble;
+      triR = PART_RADIUS * (0.88 + Math.abs(Math.sin(now * 0.018)) * 0.14);
+      stroke = isInvuln ? "#ccddff" : "#bbffdd";
+      fill   = isInvuln ? "rgba(140,180,255,0.18)" : "rgba(160,255,200,0.15)";
+      shadow = isInvuln ? "rgba(130,170,255,0.75)" : "rgba(140,255,180,0.7)";
+      lineW  = 1.8;
+      blur   = isInvuln ? 14 : 10;
+    }
+
     ctx.save();
-    if (blink) ctx.globalAlpha = 0.35;
-    ctx.shadowColor = isInvuln ? "rgba(100,200,255,0.9)" : "rgba(100,255,120,0.7)";
-    ctx.shadowBlur = isInvuln ? 20 : 12;
-    ctx.strokeStyle = isInvuln ? "#7de8ff" : "#88ff99";
-    ctx.fillStyle = isInvuln ? "rgba(100,220,255,0.25)" : "rgba(100,255,130,0.2)";
-    ctx.lineWidth = 2;
-    drawTriangle(ctx, wx, wy, PART_RADIUS);
+    if (blink) ctx.globalAlpha = 0.32;
+    ctx.shadowColor = shadow;
+    ctx.shadowBlur  = blur;
+    ctx.strokeStyle = stroke;
+    ctx.fillStyle   = fill;
+    ctx.lineWidth   = lineW;
+    ctx.setLineDash([]);
+    drawTriangle(ctx, wx, wy, triR, triAngle);
     ctx.fill();
     ctx.stroke();
+
+    // ── Extra personality details ───────────────────────────────────────────
+    if (i === 0 && !isInvuln) {
+      // Brave: small bold forward dot (leading "eye")
+      const dotX = wx + Math.cos(triAngle) * (triR * 0.55);
+      const dotY = wy + Math.sin(triAngle) * (triR * 0.55);
+      ctx.fillStyle = "#eeffcc";
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (i === 1 && !isInvuln) {
+      // Slow: tiny drooping "..." trailing dot
+      ctx.fillStyle = "rgba(120,200,130,0.5)";
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(wx - 3, wy + triR * 0.7, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (i === 2 && !isInvuln) {
+      // Anxious: two tiny "eyes" darting with shake
+      const eyeAngle = triAngle + Math.PI * 0.6;
+      const eyeAngle2 = triAngle - Math.PI * 0.6;
+      const er = triR * 0.45;
+      ctx.fillStyle = "rgba(200,255,220,0.7)";
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(wx + Math.cos(eyeAngle) * er, wy + Math.sin(eyeAngle) * er, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(wx + Math.cos(eyeAngle2) * er, wy + Math.sin(eyeAngle2) * er, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.restore();
   });
 
-  // Dash trail
+  // Dash trail (uses personality positions)
   if (p.dashing) {
     const alpha = p.dashTimer / DASH_DURATION;
     p.parts.forEach((pt, i) => {
       if (!pt.alive) return;
-      const wx = p.x + PART_OFFSETS[i].x - p.dashVx * 0.04;
-      const wy = p.y + PART_OFFSETS[i].y - p.dashVy * 0.04;
+      let twx = p.x + PART_OFFSETS[i].x - p.dashVx * 0.04;
+      let twy = p.y + PART_OFFSETS[i].y - p.dashVy * 0.04;
+      if (i === 1) { twx += pt.lagX; twy += pt.lagY; }
+      if (i === 2) { twx += pt.shakeX; twy += pt.shakeY; }
       ctx.save();
       ctx.globalAlpha = alpha * 0.4;
       ctx.strokeStyle = "#88ddff";
       ctx.lineWidth = 1.5;
-      drawTriangle(ctx, wx, wy, PART_RADIUS * 0.9);
+      drawTriangle(ctx, twx, twy, PART_RADIUS * 0.88);
       ctx.stroke();
       ctx.restore();
     });

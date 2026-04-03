@@ -1293,7 +1293,7 @@ export default function Game() {
           title={muted ? "Unmute" : "Mute"}
           style={{
             position: "absolute",
-            top: 8,
+            bottom: 8,
             right: 8,
             width: 28,
             height: 28,

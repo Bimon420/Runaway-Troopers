@@ -1243,8 +1243,11 @@ export default function Game() {
       Object.assign(s, ns);
     }
 
+    const handleBlur = () => s.keys.clear();
+
     window.addEventListener("keydown", handleKey);
     window.addEventListener("keyup", handleKey);
+    window.addEventListener("blur", handleBlur);
     canvas.addEventListener("click", handleClick);
 
     function loop(time: number) {
@@ -1264,6 +1267,7 @@ export default function Game() {
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener("keydown", handleKey);
       window.removeEventListener("keyup", handleKey);
+      window.removeEventListener("blur", handleBlur);
       canvas.removeEventListener("click", handleClick);
     };
   }, []);

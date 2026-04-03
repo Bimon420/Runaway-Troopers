@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import themeSrc from "@assets/Runaway_Troopers_Theme_Final_5___1775251482370.mp3";
 
 const W = 960;
 const H = 540;
@@ -1183,6 +1184,23 @@ export default function Game() {
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const [, forceUpdate] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [muted, setMuted] = useState(false);
+
+  // ── Music setup ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const audio = new Audio(themeSrc);
+    audio.loop = true;
+    audio.volume = 0.55;
+    audioRef.current = audio;
+    audio.play().catch(() => {});  // browsers may block until user interaction
+    return () => { audio.pause(); audio.src = ""; };
+  }, []);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.muted = muted;
+  }, [muted]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1195,6 +1213,10 @@ export default function Game() {
     const handleKey = (e: KeyboardEvent) => {
       if (e.type === "keydown") {
         s.keys.add(e.key);
+        // Resume audio after first keypress (browser autoplay policy)
+        if (audioRef.current && audioRef.current.paused) {
+          audioRef.current.play().catch(() => {});
+        }
         if (e.key === "Enter" && (s.phase === "menu" || s.phase === "dead")) {
           startGame();
         }
@@ -1207,6 +1229,10 @@ export default function Game() {
     };
 
     const handleClick = () => {
+      // Resume audio after first user gesture (browser autoplay policy)
+      if (audioRef.current && audioRef.current.paused) {
+        audioRef.current.play().catch(() => {});
+      }
       if (s.phase === "menu" || s.phase === "dead") startGame();
     };
 
@@ -1260,6 +1286,29 @@ export default function Game() {
             boxShadow: "0 0 60px rgba(50,200,80,0.08), 0 0 120px rgba(0,0,0,0.8)",
           }}
         />
+        {/* Mute button overlay */}
+        <button
+          data-testid="button-mute"
+          onClick={() => setMuted(m => !m)}
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 12,
+            background: "rgba(0,0,0,0.55)",
+            border: `1px solid ${muted ? "rgba(255,80,80,0.5)" : "rgba(100,255,120,0.35)"}`,
+            borderRadius: 6,
+            color: muted ? "rgba(255,100,100,0.9)" : "rgba(100,255,130,0.9)",
+            fontFamily: "monospace",
+            fontSize: 13,
+            padding: "4px 10px",
+            cursor: "pointer",
+            letterSpacing: "0.05em",
+            userSelect: "none",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          {muted ? "♪ OFF" : "♪ ON"}
+        </button>
       </div>
       <div className="mt-3 text-xs text-center" style={{ color: "rgba(100,130,120,0.6)", fontFamily: "monospace" }}>
         WASD / ARROWS to move &nbsp;•&nbsp; SPACE to dash &nbsp;•&nbsp; Collect ⬡ shields &nbsp;•&nbsp; Soldiers block you — maneuver around them

@@ -954,48 +954,26 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     let wx: number, wy: number, triAngle: number, triR: number;
     let stroke: string, fill: string, shadow: string, lineW: number, blur: number;
 
+    // ── Uniform shape — personality expressed through position only ──────────
     if (i === 0) {
-      // ── BRAVE: leans forward, faces movement dir, bold and bright ─────────
       const leanX = spd > 12 ? (p.vx / spd) * 3 : 0;
       const leanY = spd > 12 ? (p.vy / spd) * 3 : 0;
       wx = p.x + PART_OFFSETS[0].x + leanX + pt.shakeX;
       wy = p.y + PART_OFFSETS[0].y + leanY + pt.shakeY;
-      // Subtle tilt toward movement dir — blend only 20% from default upward angle
-      const defaultAngle = -Math.PI / 2;
-      const tiltBlend = spd > 12 ? 0.22 : 0;
-      const angleDiff = moveDir - defaultAngle;
-      const wrappedDiff = ((angleDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
-      triAngle = defaultAngle + wrappedDiff * tiltBlend;
-      triR = PART_RADIUS * 0.88;
-      stroke = isInvuln ? "#aaeeff" : "#bbffaa";
-      fill   = isInvuln ? "rgba(120,230,255,0.32)" : "rgba(140,255,120,0.30)";
-      shadow = isInvuln ? "rgba(100,210,255,1)"    : "rgba(100,255,80,0.95)";
-      lineW  = 2.5;
-      blur   = isInvuln ? 22 : 18;
     } else if (i === 1) {
-      // ── SLOW/SLACK: lags behind, chunky/fat, slightly tilted ─────────────
       wx = p.x + PART_OFFSETS[1].x + pt.lagX + pt.shakeX;
       wy = p.y + PART_OFFSETS[1].y + pt.lagY + pt.shakeY;
-      triAngle = -Math.PI / 2 + 0.28;   // leans away, slouching tilt
-      triR = PART_RADIUS * 1.45;         // noticeably bigger / fat
-      stroke = isInvuln ? "#77bbdd" : "#77bb88";
-      fill   = isInvuln ? "rgba(80,170,210,0.28)" : "rgba(80,190,100,0.26)";
-      shadow = isInvuln ? "rgba(70,160,200,0.6)"  : "rgba(70,180,90,0.55)";
-      lineW  = 2.2;
-      blur   = isInvuln ? 12 : 9;
     } else {
-      // ── ANXIOUS: shaky position, nervous wobble, slightly paler ──────────
       wx = p.x + PART_OFFSETS[2].x + pt.shakeX;
       wy = p.y + PART_OFFSETS[2].y + pt.shakeY;
-      const wobble = Math.sin(now * 0.022) * 0.32;
-      triAngle = -Math.PI / 2 + wobble;
-      triR = PART_RADIUS * (0.88 + Math.abs(Math.sin(now * 0.018)) * 0.14);
-      stroke = isInvuln ? "#ccddff" : "#bbffdd";
-      fill   = isInvuln ? "rgba(140,180,255,0.18)" : "rgba(160,255,200,0.15)";
-      shadow = isInvuln ? "rgba(130,170,255,0.75)" : "rgba(140,255,180,0.7)";
-      lineW  = 1.8;
-      blur   = isInvuln ? 14 : 10;
     }
+    triAngle = -Math.PI / 2;
+    triR     = PART_RADIUS;
+    stroke   = isInvuln ? "#7de8ff" : "#88ff99";
+    fill     = isInvuln ? "rgba(100,220,255,0.25)" : "rgba(100,255,130,0.2)";
+    shadow   = isInvuln ? "rgba(100,200,255,0.9)"  : "rgba(100,255,120,0.7)";
+    lineW    = 2;
+    blur     = isInvuln ? 20 : 12;
 
     ctx.save();
     if (blink) ctx.globalAlpha = 0.32;
@@ -1005,48 +983,9 @@ function render(ctx: CanvasRenderingContext2D, s: GameState) {
     ctx.fillStyle   = fill;
     ctx.lineWidth   = lineW;
     ctx.setLineDash([]);
-    if (i === 1) {
-      // Fat/slow: elongated — long tip, chunky base
-      drawElongatedTriangle(ctx, wx, wy, triR * 1.5, triR * 0.9, triAngle);
-    } else {
-      drawTriangle(ctx, wx, wy, triR, triAngle);
-    }
+    drawTriangle(ctx, wx, wy, triR, triAngle);
     ctx.fill();
     ctx.stroke();
-
-    // ── Extra personality details ───────────────────────────────────────────
-    if (i === 0 && !isInvuln) {
-      // Brave: small bold forward dot (leading "eye")
-      const dotX = wx + Math.cos(triAngle) * (triR * 0.55);
-      const dotY = wy + Math.sin(triAngle) * (triR * 0.55);
-      ctx.fillStyle = "#eeffcc";
-      ctx.shadowBlur = 6;
-      ctx.beginPath();
-      ctx.arc(dotX, dotY, 2.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    if (i === 1 && !isInvuln) {
-      // Slow: tiny drooping "..." trailing dot
-      ctx.fillStyle = "rgba(120,200,130,0.5)";
-      ctx.shadowBlur = 0;
-      ctx.beginPath();
-      ctx.arc(wx - 3, wy + triR * 0.7, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    if (i === 2 && !isInvuln) {
-      // Anxious: two tiny "eyes" darting with shake
-      const eyeAngle = triAngle + Math.PI * 0.6;
-      const eyeAngle2 = triAngle - Math.PI * 0.6;
-      const er = triR * 0.45;
-      ctx.fillStyle = "rgba(200,255,220,0.7)";
-      ctx.shadowBlur = 0;
-      ctx.beginPath();
-      ctx.arc(wx + Math.cos(eyeAngle) * er, wy + Math.sin(eyeAngle) * er, 1.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(wx + Math.cos(eyeAngle2) * er, wy + Math.sin(eyeAngle2) * er, 1.6, 0, Math.PI * 2);
-      ctx.fill();
-    }
 
     ctx.restore();
   });

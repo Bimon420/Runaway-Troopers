@@ -1290,24 +1290,26 @@ export default function Game() {
         <button
           data-testid="button-mute"
           onClick={() => setMuted(m => !m)}
+          title={muted ? "Unmute" : "Mute"}
           style={{
             position: "absolute",
-            top: 10,
-            right: 12,
-            background: "rgba(0,0,0,0.55)",
-            border: `1px solid ${muted ? "rgba(255,80,80,0.5)" : "rgba(100,255,120,0.35)"}`,
-            borderRadius: 6,
-            color: muted ? "rgba(255,100,100,0.9)" : "rgba(100,255,130,0.9)",
-            fontFamily: "monospace",
-            fontSize: 13,
-            padding: "4px 10px",
+            top: 8,
+            right: 8,
+            width: 28,
+            height: 28,
+            background: "rgba(0,0,0,0.45)",
+            border: "none",
+            borderRadius: "50%",
+            color: muted ? "rgba(255,90,90,0.85)" : "rgba(100,255,130,0.85)",
+            fontSize: 15,
+            lineHeight: "28px",
+            textAlign: "center",
+            padding: 0,
             cursor: "pointer",
-            letterSpacing: "0.05em",
             userSelect: "none",
-            backdropFilter: "blur(4px)",
           }}
         >
-          {muted ? "♪ OFF" : "♪ ON"}
+          {muted ? "🔇" : "🔊"}
         </button>
       </div>
       <div className="mt-3 text-xs text-center" style={{ color: "rgba(100,130,120,0.6)", fontFamily: "monospace" }}>
